@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skillhub 技能安全审计 | Verified Claw Skills</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>🛡️ Skillhub 技能安全审计</h1>
+            <p class="subtitle">AI Agent 技能安全扫描与风险评级平台</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <section id="overview" class="stats-cards">
+            <div class="stat-card stat-extreme">
+                <div class="stat-number" id="count-extreme">-</div>
+                <div class="stat-label">⛔ EXTREME</div>
+                <div class="stat-desc">建议禁止安装</div>
+            </div>
+            <div class="stat-card stat-high">
+                <div class="stat-number" id="count-high">-</div>
+                <div class="stat-label">🔴 HIGH</div>
+                <div class="stat-desc">需安全审批</div>
+            </div>
+            <div class="stat-card stat-medium">
+                <div class="stat-number" id="count-medium">-</div>
+                <div class="stat-label">🟡 MEDIUM</div>
+                <div class="stat-desc">需谨慎安装</div>
+            </div>
+            <div class="stat-card stat-low">
+                <div class="stat-number" id="count-low">-</div>
+                <div class="stat-label">🟢 LOW</div>
+                <div class="stat-desc">可安全安装</div>
+            </div>
+            <div class="stat-card stat-total">
+                <div class="stat-number" id="count-total">-</div>
+                <div class="stat-label">📊 总计</div>
+                <div class="stat-desc">已审计技能</div>
+            </div>
+        </section>
+
+        <section id="scan-info" class="info-bar">
+            <span>📅 审计时间: <strong id="scan-date">-</strong></span>
+            <span>⏱️ 扫描耗时: <strong id="scan-duration">-</strong></span>
+            <span>🔧 扫描引擎: skill-vetter + 自动化规则扫描</span>
+        </section>
+
+        <section id="controls">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="🔍 搜索技能名称或 slug..." />
+            </div>
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-filter="all">全部</button>
+                <button class="filter-btn btn-extreme" data-filter="EXTREME">⛔ EXTREME</button>
+                <button class="filter-btn btn-high" data-filter="HIGH">🔴 HIGH</button>
+                <button class="filter-btn btn-medium" data-filter="MEDIUM">🟡 MEDIUM</button>
+                <button class="filter-btn btn-low" data-filter="LOW">🟢 LOW</button>
+                <button class="filter-btn btn-unknown" data-filter="UNKNOWN">❓ 未知</button>
+            </div>
+            <div class="sort-controls">
+                <label>排序:
+                    <select id="sort-select">
+                        <option value="risk">风险等级</option>
+                        <option value="slug">名称</option>
+                        <option value="critical">CRITICAL 数</option>
+                        <option value="high">HIGH 数</option>
+                        <option value="files">文件数</option>
+                    </select>
+                </label>
+            </div>
+        </section>
+
+        <section id="results-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>风险</th>
+                        <th>技能</th>
+                        <th>文件</th>
+                        <th>大小</th>
+                        <th>C</th>
+                        <th>H</th>
+                        <th>M</th>
+                        <th>特征</th>
+                        <th>状态</th>
+                    </tr>
+                </thead>
+                <tbody id="results-body">
+                    <tr><td colspan="9" class="loading">⏳ 加载审计数据中...</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="detail-panel" class="hidden">
+            <div class="detail-header">
+                <h2 id="detail-slug"></h2>
+                <span id="detail-risk-badge"></span>
+                <button id="detail-close" class="close-btn">✕</button>
+            </div>
+            <div id="detail-content"></div>
+        </section>
+
+        <section id="about">
+            <h2>📋 关于本审计</h2>
+            <div class="about-grid">
+                <div class="about-card">
+                    <h3>🔬 审计方法</h3>
+                    <p>基于 <strong>skill-vetter</strong> 协议，对每个技能执行以下检查：</p>
+                    <ol>
+                        <li><strong>Source Check</strong> — 来源、作者信誉、下载量</li>
+                        <li><strong>Code Review</strong> — RED FLAGS 检测（反弹 shell、凭据窃取、数据外传、混淆代码等）</li>
+                        <li><strong>Permission Scope</strong> — 文件访问、网络请求、命令执行权限评估</li>
+                        <li><strong>Risk Classification</strong> — EXTREME / HIGH / MEDIUM / LOW 四级风险评定</li>
+                    </ol>
+                </div>
+                <div class="about-card">
+                    <h3>⚠️ 风险等级说明</h3>
+                    <dl>
+                        <dt class="risk-extreme">⛔ EXTREME</dt>
+                        <dd>发现恶意模式（反弹 shell、凭据窃取等），建议禁止安装</dd>
+                        <dt class="risk-high">🔴 HIGH</dt>
+                        <dd>连接未知外部服务器、需 sudo 权限、读取环境变量等，需安全审批</dd>
+                        <dt class="risk-medium">🟡 MEDIUM</dt>
+                        <dd>注册系统服务、安装外部包、修改 PATH 等，需谨慎</dd>
+                        <dt class="risk-low">🟢 LOW</dt>
+                        <dd>未发现明显风险，可安全安装</dd>
+                    </dl>
+                </div>
+                <div class="about-card">
+                    <h3>🔄 更新频率</h3>
+                    <p>审计数据定期更新。上次更新时间见页面顶部。</p>
+                    <p>如发现技能安全问题，欢迎提交 Issue。</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>🛡️ Skillhub 技能安全审计 — Powered by <a href="https://openclaw.ai">OpenClaw</a> + skill-vetter</p>
+        </div>
+    </footer>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
