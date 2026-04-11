@@ -1,4 +1,4 @@
-// Skillhub Audit - Main Application (Chunked Loading)
+// Skillhub Audit - Main Application (Chunked + Compact Format)
 const RISK_ORDER = { EXTREME: 0, HIGH: 1, MEDIUM: 2, LOW: 3, UNKNOWN: 4 };
 const RISK_EMOJI = { EXTREME: '⛔', HIGH: '🔴', MEDIUM: '🟡', LOW: '🟢', UNKNOWN: '❓' };
 
@@ -7,23 +7,38 @@ let summary = null;
 let currentFilter = 'all';
 let currentSearch = '';
 let currentSort = 'risk';
+let allLoaded = false;
 
 function formatBytes(bytes) {
+    if (!bytes) return '0 B';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / 1048576).toFixed(1) + ' MB';
 }
 
-// Load summary first (tiny ~0.5KB)
+// Normalize compact entry to full format
+function normalize(d) {
+    return {
+        slug: d.s,
+        name: d.n || '',
+        risk_level: d.r,
+        file_count: d.f || 0,
+        total_size: d.z || 0,
+        has_scripts: !!d.S,
+        has_hooks: !!d.H,
+        has_exec_directives: !!d.E,
+        critical: d.c || 0,
+        high: d.h || 0,
+        medium: d.m || 0,
+        status: d.st || '',
+        error: d.er || ''
+    };
+}
+
+// Load summary (tiny ~0.5KB)
 async function loadSummary() {
-    try {
-        const resp = await fetch('data/audit-summary.json');
-        summary = await resp.json();
-        updateRunDetails();
-        updateStatsFromSummary();
-    } catch (e) {
-        console.error('Failed to load summary:', e);
-    }
+    const resp = await fetch('data/audit-summary.json');
+    summary = await resp.json();
 }
 
 // Update run details panel
@@ -49,73 +64,45 @@ function updateRunDetails() {
     document.getElementById('scan-duration').textContent = summary.scan_duration;
 }
 
-// Quick stats from summary (no full load needed)
 function updateStatsFromSummary() {
     if (!summary) return;
-    document.getElementById('count-extreme').textContent = (summary.risk_counts.EXTREME || 0);
-    document.getElementById('count-high').textContent = (summary.risk_counts.HIGH || 0);
-    document.getElementById('count-medium').textContent = (summary.risk_counts.MEDIUM || 0);
-    document.getElementById('count-low').textContent = (summary.risk_counts.LOW || 0);
-    document.getElementById('count-total').textContent = summary.total;
+    document.getElementById('count-extreme').textContent = (summary.risk_counts.EXTREME || 0).toLocaleString();
+    document.getElementById('count-high').textContent = (summary.risk_counts.HIGH || 0).toLocaleString();
+    document.getElementById('count-medium').textContent = (summary.risk_counts.MEDIUM || 0).toLocaleString();
+    document.getElementById('count-low').textContent = (summary.risk_counts.LOW || 0).toLocaleString();
+    document.getElementById('count-total').textContent = summary.total.toLocaleString();
 }
 
-// Load data chunks on demand based on filter
-async function loadDataForFilter(filter) {
-    const files = summary ? summary.files : [];
-    let dataFiles = [];
-
-    if (filter === 'all') {
-        dataFiles = files;
-    } else {
-        dataFiles = files.filter(f => f.includes(filter.toLowerCase()));
-    }
-
-    // Load all matching chunks
-    const chunks = await Promise.all(
-        dataFiles.map(f => fetch(`data/${f}`).then(r => r.json()).catch(e => { console.error(e); return []; }))
+// Load all chunks
+async function loadAllChunks() {
+    if (!summary) return;
+    const results = await Promise.all(
+        summary.files.map(f =>
+            fetch(`data/${f}`).then(r => r.json()).catch(e => { console.error('Chunk load error:', f, e); return []; })
+        )
     );
-    return chunks.flat();
+    allData = results.flat().map(normalize);
+    allLoaded = true;
 }
 
-// Initial load: load summary + render table with "load more" for filtered views
+// Main load
 async function loadData() {
     try {
-        // Load summary first
         await loadSummary();
+        updateRunDetails();
+        updateStatsFromSummary();
 
-        // Pre-load EXTREME (small, most important) + show others on demand
-        const extremeData = await loadDataForFilter('EXTREME');
-        allData = extremeData;
-
-        // Show loading indicator for remaining
-        document.getElementById('results-body').innerHTML = '<tr><td colspan="9" class="loading">✅ 已加载 EXTREME 技能。切换筛选器以加载其他类别数据。</td></tr>';
-
-        // Update stats with what we have
+        // Load all chunks in parallel
+        document.getElementById('results-body').innerHTML = '<tr><td colspan="9" class="loading">⏳ 正在加载审计数据...</td></tr>';
+        await loadAllChunks();
         renderTable();
-
-        // Background: load all data for full search
-        loadAllDataBackground();
     } catch (e) {
         document.getElementById('results-body').innerHTML = '<tr><td colspan="9" class="loading">❌ 加载失败: ' + e.message + '</td></tr>';
     }
 }
 
-async function loadAllDataBackground() {
-    try {
-        if (!summary) return;
-        const allChunks = await Promise.all(
-            summary.files.map(f => fetch(`data/${f}`).then(r => r.json()).catch(e => { console.error(e); return []; }))
-        );
-        allData = allChunks.flat();
-        renderTable();
-    } catch (e) {
-        console.error('Background load failed:', e);
-    }
-}
-
-// Filter & sort
 function getFilteredData() {
-    let data = [...allData];
+    let data = allData;
 
     if (currentFilter !== 'all') {
         data = data.filter(d => d.risk_level === currentFilter);
@@ -124,8 +111,7 @@ function getFilteredData() {
     if (currentSearch) {
         const q = currentSearch.toLowerCase();
         data = data.filter(d =>
-            d.slug.toLowerCase().includes(q) ||
-            (d.name || '').toLowerCase().includes(q)
+            d.slug.toLowerCase().includes(q) || d.name.toLowerCase().includes(q)
         );
     }
 
@@ -133,9 +119,9 @@ function getFilteredData() {
         switch (currentSort) {
             case 'risk': return (RISK_ORDER[a.risk_level] || 9) - (RISK_ORDER[b.risk_level] || 9) || a.slug.localeCompare(b.slug);
             case 'slug': return a.slug.localeCompare(b.slug);
-            case 'critical': return (b.critical || 0) - (a.critical || 0);
-            case 'high': return (b.high || 0) - (a.high || 0);
-            case 'files': return (b.file_count || 0) - (a.file_count || 0);
+            case 'critical': return b.critical - a.critical;
+            case 'high': return b.high - a.high;
+            case 'files': return b.file_count - a.file_count;
             default: return 0;
         }
     });
@@ -143,7 +129,6 @@ function getFilteredData() {
     return data;
 }
 
-// Render table
 function renderTable() {
     const data = getFilteredData();
     const tbody = document.getElementById('results-body');
@@ -161,7 +146,7 @@ function renderTable() {
         const emoji = RISK_EMOJI[d.risk_level] || '❓';
         const status = d.status === 'audited'
             ? '<span class="status-ok">✅</span>'
-            : `<span class="status-fail" title="${d.error || ''}">❌</span>`;
+            : `<span class="status-fail" title="${d.error}">❌</span>`;
 
         const features = [];
         if (d.has_scripts) features.push('<span class="feature-tag">scripts</span>');
@@ -171,11 +156,11 @@ function renderTable() {
         return `<tr>
             <td><span class="risk-badge ${riskClass}">${emoji} ${d.risk_level}</span></td>
             <td class="slug-cell" data-slug="${d.slug}">${d.slug}</td>
-            <td>${d.file_count || 0}</td>
-            <td>${formatBytes(d.total_size || 0)}</td>
-            <td>${d.critical || 0}</td>
-            <td>${d.high || 0}</td>
-            <td>${d.medium || 0}</td>
+            <td>${d.file_count}</td>
+            <td>${formatBytes(d.total_size)}</td>
+            <td>${d.critical}</td>
+            <td>${d.high}</td>
+            <td>${d.medium}</td>
             <td>${features.join('')}</td>
             <td>${status}</td>
         </tr>`;
@@ -186,7 +171,6 @@ function renderTable() {
     }
 }
 
-// Show detail
 function showDetail(slug) {
     const d = allData.find(x => x.slug === slug);
     if (!d) return;
@@ -203,22 +187,11 @@ function showDetail(slug) {
         <p><strong>状态:</strong> ${d.status}</p>
         <p><strong>文件数:</strong> ${d.file_count} | <strong>大小:</strong> ${formatBytes(d.total_size)}</p>
         ${d.name ? `<p><strong>名称:</strong> ${d.name}</p>` : ''}
-        ${d.version ? `<p><strong>版本:</strong> ${d.version}</p>` : ''}
     `;
 
     if (d.has_scripts) html += '<p>⚠️ <strong>包含可执行脚本</strong></p>';
     if (d.has_hooks) html += '<p>⚠️ <strong>包含 hooks</strong></p>';
     if (d.has_exec_directives) html += '<p>⚠️ <strong>含 exec 指令</strong></p>';
-
-    if (d.findings && d.findings.length > 0) {
-        html += '<h3 style="margin:16px 0 8px">🔍 安全发现</h3>';
-        d.findings.forEach(f => {
-            html += `<div class="finding-item finding-${f.severity.toLowerCase()}">
-                <div class="finding-rule">[${f.severity}] ${f.rule_id || f.pattern || ''}</div>
-                <div class="finding-context">${f.context || f.severity}</div>
-            </div>`;
-        });
-    }
 
     if (d.error) {
         html += `<p style="margin-top:16px;color:var(--extreme)">❌ 错误: ${d.error}</p>`;
@@ -260,5 +233,4 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') document.getElementById('detail-panel').classList.add('hidden');
 });
 
-// Init
 loadData();
