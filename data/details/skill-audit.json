@@ -1,0 +1,1 @@
+{"slug":"skill-audit","name":"SkillLens Audit","version":"1.0.0","risk_level":"EXTREME","file_count":2,"total_size":3172,"has_scripts":false,"has_hooks":false,"has_exec_directives":true,"status":"audited","critical":1,"high":0,"medium":0,"findings":[{"sev":"CRITICAL","rule":"remote_exec_pipe","ctx":"un arbitrary shell commands, `curl | bash`, `eval`, or to fetch-and-exe"}]}

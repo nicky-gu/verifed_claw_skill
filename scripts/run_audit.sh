@@ -114,14 +114,14 @@ git commit -m "$COMMIT_MSG" --allow-empty 2>/dev/null || true
 if [[ -z "$PAT" ]]; then
     echo "  ⚠️ GITHUB_PAGES_PAT 未设置，跳过推送"
     echo "  设置方式: export GITHUB_PAGES_PAT=ghp_xxxx"
-    echo "  或手动推送: cd $SITE_DIR && git push origin main"
+    echo "  或手动推送: python3 scripts/push_github_api.py $SITE_DIR"
     exit 0
 fi
 
-# 推送（PAT 通过 URL 注入，不写入 remote config）
-git push "https://${PAT}@github.com/nicky-gu/verifed_claw_skill.git" main 2>&1 || {
+# 推送（通过 GitHub API，绕过 github.com TLS 阻断）
+python3 scripts/push_github_api.py "$SITE_DIR" 2>&1 || {
     echo "  ❌ Push 失败，可能需要重试"
-    echo "  手动: cd $SITE_DIR && git push origin main"
+    echo "  手动: python3 scripts/push_github_api.py $SITE_DIR"
     exit 1
 }
 
