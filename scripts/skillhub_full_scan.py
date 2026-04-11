@@ -1,22 +1,104 @@
 #!/usr/bin/env python3
 """
-Skillhub 全量技能安全扫描器 v3
-- 自动下载技能 zip
+ClawHub 全量技能安全扫描器 v4
+- 通过 clawhub.ai API 下载技能 zip（权威源，覆盖全部 47k+ 技能）
+- lightmake.site 作为备用下载源
+- 自动处理 30/min 速率限制
 - 用规则引擎扫描（与 skill-vetter 同样的 RED FLAGS）
-- 按优先级排序：先扫描高下载量技能
 - 输出结构化 JSON + Markdown 报告
 """
-import json, os, re, sys, time, zipfile, io, urllib.request, tempfile, concurrent.futures, traceback
+import json, os, re, sys, time, zipfile, io, urllib.request, tempfile, threading, traceback
 
 # ---- 配置 ----
-INDEX_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/skills.json"
-# 使用 lightmake.site API 作为主要下载源（覆盖全部 15k+ 技能）
-# COS URL 只覆盖索引中的 50 个
-DOWNLOAD_URL_TEMPLATE = "https://lightmake.site/api/v1/download?slug=%s"
+CLAWHUB_DOWNLOAD = "https://clawhub.ai/api/v1/download?slug=%s"
+LIGHTMAKE_DOWNLOAD = "https://lightmake.site/api/v1/download?slug=%s"
 SLUGS_FILE = os.environ.get("SLUGS_FILE", "/tmp/skillhub_complete_slugs.json")
 OUTPUT_DIR = os.environ.get("AUDIT_REPORT_DIR", os.path.expanduser("~/.openclaw/reports"))
-MAX_CONCURRENT = 8  # 并发下载数
-MAX_TOTAL = 0        # 0 = 全部
+MAX_TOTAL = 0  # 0 = 全部
+
+# 速率限制: clawhub.ai 30 req/min
+RATE_LIMIT_PER_MIN = 28  # 留一点余量
+RATE_WINDOW_SEC = 60
+
+# ---- 速率限制器 ----
+class RateLimiter:
+    def __init__(self, max_per_window, window_sec):
+        self.max = max_per_window
+        self.window = window_sec
+        self.timestamps = []
+        self.lock = threading.Lock()
+
+    def acquire(self):
+        """阻塞等待直到可以发送请求"""
+        while True:
+            with self.lock:
+                now = time.time()
+                # 清理过期的 timestamps
+                self.timestamps = [t for t in self.timestamps if now - t < self.window]
+                if len(self.timestamps) < self.max:
+                    self.timestamps.append(now)
+                    return
+                # 计算需要等待多久
+                oldest = self.timestamps[0]
+                wait = self.window - (now - oldest) + 0.1
+            if wait > 0:
+                time.sleep(wait)
+
+# 全局速率限制器
+rate_limiter = RateLimiter(RATE_LIMIT_PER_MIN, RATE_WINDOW_SEC)
+
+# ---- 下载函数 ----
+def download_skill(slug, version=""):
+    """下载技能 zip，返回 bytes 或 None"""
+    # 构造 URL
+    url = CLAWHUB_DOWNLOAD % slug
+    if version:
+        url += f"&version={version}"
+
+    # 尝试 clawhub.ai（权威源）
+    rate_limiter.acquire()
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "clawhub/0.9.0",
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = resp.read()
+        if len(data) > 50:
+            return data
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            # 速率限制 — 等待后重试一次
+            time.sleep(65)
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "clawhub/0.9.0"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = resp.read()
+                if len(data) > 50:
+                    return data
+            except:
+                pass
+        elif e.code == 404:
+            # clawhub 也没有，尝试 lightmake 备用源
+            pass
+        else:
+            pass
+    except Exception:
+        pass
+
+    # 备用: lightmake.site
+    try:
+        fallback_url = LIGHTMAKE_DOWNLOAD % slug
+        req = urllib.request.Request(fallback_url, headers={
+            "User-Agent": "skillhub-audit/4.0",
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read()
+        if len(data) > 50:
+            return data
+    except:
+        pass
+
+    return None
 
 # ---- 规则引擎 (与 skill-vetter RED FLAGS 对齐) ----
 
@@ -75,6 +157,8 @@ def audit_skill(slug, meta=None):
         "slug": slug,
         "name": (meta or {}).get("name", ""),
         "version": (meta or {}).get("version", ""),
+        "downloads": (meta or {}).get("downloads", 0),
+        "stars": (meta or {}).get("stars", 0),
         "status": "unknown",
         "risk_level": "UNKNOWN",
         "file_count": 0,
@@ -91,14 +175,10 @@ def audit_skill(slug, meta=None):
     }
 
     # 下载
-    url = DOWNLOAD_URL_TEMPLATE % slug
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "skillhub-audit/3.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            zip_data = resp.read()
-    except Exception as e:
+    version = (meta or {}).get("version", "")
+    zip_data = download_skill(slug, version)
+    if zip_data is None:
         result["status"] = "download_failed"
-        result["error"] = str(e)[:100]
         return result
 
     if len(zip_data) < 50:
@@ -189,66 +269,68 @@ def audit_skill(slug, meta=None):
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # 加载 slug 列表
+    # 加载 slug 列表（由 discover_slugs.py v2 生成，已含 downloads/stars/capabilityTags）
     with open(SLUGS_FILE) as f:
         all_slugs = json.load(f)
-
-    # 也加载索引（有 downloads/stars 信息）
-    try:
-        with urllib.request.urlopen(INDEX_URL, timeout=10) as resp:
-            idx_data = json.loads(resp.read())
-        idx_meta = {s["slug"]: s for s in idx_data.get("skills", [])}
-    except:
-        idx_meta = {}
 
     slugs = list(all_slugs.keys())
     if MAX_TOTAL > 0:
         slugs = slugs[:MAX_TOTAL]
 
-    print(f"=== Skillhub 全量安全扫描 v3 ===")
+    print(f"=== ClawHub 全量安全扫描 v4 ===")
     print(f"总技能数: {len(slugs)}")
-    print(f"并发数: {MAX_CONCURRENT}")
+    print(f"下载源: clawhub.ai (primary) + lightmake.site (fallback)")
+    print(f"速率限制: {RATE_LIMIT_PER_MIN} req/min")
+    print(f"预计耗时: {len(slugs)*60/RATE_LIMIT_PER_MIN/60:.1f} 小时")
     print(f"开始时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print()
 
-    # 并发扫描
+    # 顺序扫描（受速率限制，并发无意义）
     results = []
     done = 0
+    audited = 0
     failed = 0
     start_time = time.time()
+    checkpoint_interval = 100  # 每 100 个保存一次
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as executor:
-        future_map = {}
-        for slug in slugs:
-            meta = all_slugs.get(slug, {})
-            # 补充索引元数据
-            if slug in idx_meta:
-                meta["downloads"] = idx_meta[slug].get("downloads", 0)
-                meta["stars"] = idx_meta[slug].get("stars", 0)
-            future = executor.submit(audit_skill, slug, meta)
-            future_map[future] = slug
+    for slug in slugs:
+        meta = all_slugs.get(slug, {})
+        try:
+            result = audit_skill(slug, meta)
+        except Exception as e:
+            result = {"slug": slug, "status": "error", "error": str(e)[:100], "risk_level": "UNKNOWN"}
 
-        for future in concurrent.futures.as_completed(future_map):
-            slug = future_map[future]
-            try:
-                result = future.result()
-                results.append(result)
-            except Exception as e:
-                results.append({"slug": slug, "status": "error", "error": str(e)[:100], "risk_level": "UNKNOWN"})
-                failed += 1
+        results.append(result)
 
-            done += 1
-            if done % 200 == 0:
-                elapsed = time.time() - start_time
-                rate = done / elapsed
-                eta = (len(slugs) - done) / rate if rate > 0 else 0
-                print(f"  进度: {done}/{len(slugs)} ({done*100//len(slugs)}%) | "
-                      f"{rate:.0f} skills/s | ETA: {eta/60:.0f}min")
+        if result["status"] == "audited":
+            audited += 1
+        else:
+            failed += 1
+
+        done += 1
+
+        # 定期报告
+        if done % 50 == 0:
+            elapsed = time.time() - start_time
+            rate = done / elapsed if elapsed > 0 else 0
+            eta_hours = (len(slugs) - done) / rate / 3600 if rate > 0 else 0
+            print(f"  进度: {done:,}/{len(slugs):,} ({done*100//len(slugs)}%) | "
+                  f"✅{audited:,} ❌{failed:,} | {rate:.1f}/s | ETA: {eta_hours:.1f}h", flush=True)
+
+        # 定期保存 checkpoint
+        if done % checkpoint_interval == 0:
+            checkpoint_file = os.path.join(OUTPUT_DIR, ".scan_checkpoint.json")
+            with open(checkpoint_file, "w") as f:
+                json.dump({
+                    "done": done,
+                    "results": results,
+                    "start_time": start_time,
+                }, f, ensure_ascii=False)
 
     elapsed = time.time() - start_time
-    print(f"\n扫描完成！耗时: {elapsed:.0f}s ({elapsed/60:.1f}min)")
-    print(f"成功: {len([r for r in results if r['status'] == 'audited'])}")
-    print(f"失败: {len([r for r in results if r['status'] != 'audited'])}")
+    print(f"\n扫描完成！耗时: {elapsed:.0f}s ({elapsed/3600:.1f}h)")
+    print(f"成功: {audited:,}")
+    print(f"失败: {failed:,}")
 
     # 统计
     risk_counts = {}
@@ -261,7 +343,12 @@ def main():
         c = risk_counts.get(rl, 0)
         if c > 0:
             emoji = {"EXTREME":"⛔","HIGH":"🔴","MEDIUM":"🟡","LOW":"🟢","UNKNOWN":"❓"}[rl]
-            print(f"  {emoji} {rl}: {c}")
+            print(f"  {emoji} {rl}: {c:,}")
+
+    # 清理 checkpoint
+    checkpoint_file = os.path.join(OUTPUT_DIR, ".scan_checkpoint.json")
+    if os.path.exists(checkpoint_file):
+        os.remove(checkpoint_file)
 
     # 保存 JSON
     json_file = os.path.join(OUTPUT_DIR, f"skillhub-full-scan-{time.strftime('%Y%m%d_%H%M%S')}.json")
@@ -275,17 +362,18 @@ def main():
     results.sort(key=lambda r: (order.get(r["risk_level"],5), r["slug"]))
 
     with open(md_file, "w") as f:
-        f.write(f"# Skillhub 全量技能安全扫描报告\n\n")
+        f.write(f"# ClawHub 全量技能安全扫描报告\n\n")
         f.write(f"**扫描时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        f.write(f"**扫描范围**: {len(results)} 个技能\n\n")
-        f.write(f"**扫描耗时**: {elapsed:.0f}s\n\n")
+        f.write(f"**扫描范围**: {len(results):,} 个技能\n\n")
+        f.write(f"**扫描耗时**: {elapsed/3600:.1f}h\n\n")
+        f.write(f"**审计成功**: {audited:,} | **失败**: {failed:,}\n\n")
         f.write("## 风险概览\n\n")
         f.write("| 风险等级 | 数量 | 占比 |\n|---------|------|------|\n")
         for rl in ["EXTREME","HIGH","MEDIUM","LOW","UNKNOWN"]:
             c = risk_counts.get(rl, 0)
             emoji = {"EXTREME":"⛔","HIGH":"🔴","MEDIUM":"🟡","LOW":"🟢","UNKNOWN":"❓"}[rl]
             pct = c*100//len(results) if results else 0
-            f.write(f"| {emoji} {rl} | {c} | {pct}% |\n")
+            f.write(f"| {emoji} {rl} | {c:,} | {pct}% |\n")
 
         f.write("\n---\n\n")
 
@@ -295,8 +383,11 @@ def main():
             f.write("## ⛔ EXTREME — 建议禁止安装\n\n")
             for r in extreme:
                 f.write(f"### `{r['slug']}`\n")
+                dl = r.get("downloads", "?")
+                stars = r.get("stars", "?")
+                f.write(f"- 下载: {dl:,} | ⭐ {stars:,}\n")
                 f.write(f"- 发现: 🔴×{r['critical']} 🟠×{r['high']} 🟡×{r['medium']}\n")
-                f.write(f"- 文件数: {r['file_count']} | 大小: {r['total_size']} bytes\n")
+                f.write(f"- 文件数: {r['file_count']} | 大小: {r['total_size']:,} bytes\n")
                 if r.get("has_scripts"): f.write("- ⚠️ 包含可执行脚本\n")
                 if r.get("has_hooks"): f.write("- ⚠️ 包含 hooks\n")
                 f.write("\n<details><summary>📋 CRITICAL 发现</summary>\n\n")
@@ -306,26 +397,34 @@ def main():
                         f.write(f"- **{fi['severity']}** [{fi['rule_id']}] `{ctx}`\n")
                 f.write("\n</details>\n\n")
 
-        # HIGH 详情
-        high = [r for r in results if r["risk_level"] == "HIGH"]
+        # HIGH 详情 (top 100 by downloads)
+        high = sorted([r for r in results if r["risk_level"] == "HIGH"],
+                      key=lambda r: r.get("downloads",0), reverse=True)
         if high:
-            f.write(f"## 🔴 HIGH — 需安全审批 ({len(high)} 个)\n\n")
-            f.write("| 技能 | 文件 | CRITICAL | HIGH | MEDIUM | 脚本 |\n")
+            f.write(f"## 🔴 HIGH — 需安全审批 ({len(high):,} 个)\n\n")
+            f.write("| 技能 | 下载 | CRITICAL | HIGH | MEDIUM | 脚本 |\n")
             f.write("|------|------|----------|------|--------|------|\n")
+            shown = 0
             for r in high:
+                if shown >= 100:
+                    break
                 scripts = "✅" if r.get("has_scripts") else ""
-                f.write(f"| `{r['slug']}` | {r['file_count']} | {r['critical']} | {r['high']} | {r['medium']} | {scripts} |\n")
+                dl = r.get("downloads", 0)
+                f.write(f"| `{r['slug']}` | {dl:,} | {r['critical']} | {r['high']} | {r['medium']} | {scripts} |\n")
+                shown += 1
+            if len(high) > 100:
+                f.write(f"\n> 还有 {len(high)-100:,} 个 HIGH 技能未显示\n")
             f.write("\n")
 
         # MEDIUM 摘要
         medium = [r for r in results if r["risk_level"] == "MEDIUM"]
         if medium:
-            f.write(f"## 🟡 MEDIUM — 需谨慎 ({len(medium)} 个)\n\n")
-            f.write(f"共 {len(medium)} 个技能，不逐一列出。\n\n")
+            f.write(f"## 🟡 MEDIUM — 需谨慎 ({len(medium):,} 个)\n\n")
+            f.write(f"共 {len(medium):,} 个技能，不逐一列出。\n\n")
 
         # LOW 统计
         low = [r for r in results if r["risk_level"] == "LOW"]
-        f.write(f"## 🟢 LOW — 可安全安装 ({len(low)} 个)\n\n")
+        f.write(f"## 🟢 LOW — 可安全安装 ({len(low):,} 个)\n\n")
 
     print(f"Markdown 报告: {md_file}")
 

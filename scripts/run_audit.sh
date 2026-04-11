@@ -26,17 +26,17 @@ echo "站点目录: $SITE_DIR"
 echo "报告目录: $REPORT_DIR"
 echo ""
 
-# Phase 1: 发现全部技能
+# Phase 1: 发现全部技能 (Convex API, ~20min)
 if [[ "${1:-}" != "--push-only" && "${1:-}" != "--generate-only" ]]; then
-    echo "📥 阶段1: 发现全部技能..."
+    echo "📥 阶段1: 发现全部技能 (Convex API)..."
     SCAN_START_TIME=$(date +%s)
     python3 -u "$SKILL_DIR/scripts/discover_slugs.py" --output "$SLUGS_FILE"
     slug_count=$(python3 -c "import json; print(len(json.load(open('$SLUGS_FILE'))))")
     echo "  发现 $slug_count 个技能"
 
-    # Phase 2: 全量扫描
+    # Phase 2: 全量扫描 (clawhub.ai download, ~28h)
     echo ""
-    echo "🔍 阶段2: 全量安全扫描..."
+    echo "🔍 阶段2: 全量安全扫描 (clawhub.ai + lightmake.site fallback)..."
     SLUGS_FILE="$SLUGS_FILE" python3 -u "$SKILL_DIR/scripts/skillhub_full_scan.py"
     echo ""
 
