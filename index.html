@@ -51,6 +51,54 @@
             <span>🔧 扫描引擎: skill-vetter + 自动化规则扫描</span>
         </section>
 
+        <section id="run-details" class="run-details">
+            <h3>📊 运行详情</h3>
+            <div class="run-grid">
+                <div class="run-card">
+                    <div class="run-number" id="run-total">-</div>
+                    <div class="run-label">📋 发现技能总数</div>
+                </div>
+                <div class="run-card run-success">
+                    <div class="run-number" id="run-success">-</div>
+                    <div class="run-label">✅ 审计成功</div>
+                </div>
+                <div class="run-card run-fail">
+                    <div class="run-number" id="run-failed">-</div>
+                    <div class="run-label">❌ 下载/扫描失败</div>
+                </div>
+                <div class="run-card">
+                    <div class="run-number" id="run-files">-</div>
+                    <div class="run-label">📁 扫描文件总数</div>
+                </div>
+                <div class="run-card">
+                    <div class="run-number" id="run-size">-</div>
+                    <div class="run-label">📦 扫描数据量</div>
+                </div>
+                <div class="run-card">
+                    <div class="run-number" id="run-scripts">-</div>
+                    <div class="run-label">⚡ 含可执行脚本</div>
+                </div>
+                <div class="run-card">
+                    <div class="run-number" id="run-hooks">-</div>
+                    <div class="run-label">🪝 含 Hooks</div>
+                </div>
+                <div class="run-card">
+                    <div class="run-number" id="run-duration">-</div>
+                    <div class="run-label">⏱️ 总耗时</div>
+                </div>
+            </div>
+            <div class="run-progress">
+                <div class="progress-bar">
+                    <div class="progress-fill success-fill" id="progress-success" style="width:0%"></div>
+                    <div class="progress-fill fail-fill" id="progress-fail" style="width:0%"></div>
+                </div>
+                <div class="progress-labels">
+                    <span id="progress-success-label">-</span>
+                    <span id="progress-fail-label">-</span>
+                </div>
+            </div>
+        </section>
+
         <section id="controls">
             <div class="search-box">
                 <input type="text" id="search-input" placeholder="🔍 搜索技能名称或 slug..." />

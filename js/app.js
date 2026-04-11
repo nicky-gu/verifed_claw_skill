@@ -31,12 +31,43 @@ async function loadData() {
 // Update stats
 function updateStats() {
     const counts = { EXTREME: 0, HIGH: 0, MEDIUM: 0, LOW: 0, UNKNOWN: 0, total: allData.length };
-    allData.forEach(d => { counts[d.risk_level] = (counts[d.risk_level] || 0) + 1; });
+    let audited = 0, failed = 0, totalFiles = 0, totalSize = 0, hasScripts = 0, hasHooks = 0;
+
+    allData.forEach(d => {
+        counts[d.risk_level] = (counts[d.risk_level] || 0) + 1;
+        if (d.status === 'audited') audited++; else failed++;
+        totalFiles += d.file_count || 0;
+        totalSize += d.total_size || 0;
+        if (d.has_scripts) hasScripts++;
+        if (d.has_hooks) hasHooks++;
+    });
+
     document.getElementById('count-extreme').textContent = counts.EXTREME;
     document.getElementById('count-high').textContent = counts.HIGH;
     document.getElementById('count-medium').textContent = counts.MEDIUM;
     document.getElementById('count-low').textContent = counts.LOW;
     document.getElementById('count-total').textContent = counts.total;
+
+    // Run details
+    document.getElementById('run-total').textContent = allData.length.toLocaleString();
+    document.getElementById('run-success').textContent = audited.toLocaleString();
+    document.getElementById('run-failed').textContent = failed.toLocaleString();
+    document.getElementById('run-files').textContent = totalFiles.toLocaleString();
+    document.getElementById('run-size').textContent = formatBytes(totalSize);
+    document.getElementById('run-scripts').textContent = hasScripts.toLocaleString();
+    document.getElementById('run-hooks').textContent = hasHooks.toLocaleString();
+
+    // Duration
+    const durationMeta = document.querySelector('meta[data-scan-duration]')?.content || '-';
+    document.getElementById('run-duration').textContent = durationMeta;
+
+    // Progress bar
+    const successPct = (audited / allData.length * 100).toFixed(1);
+    const failPct = (failed / allData.length * 100).toFixed(1);
+    document.getElementById('progress-success').style.width = successPct + '%';
+    document.getElementById('progress-fail').style.width = failPct + '%';
+    document.getElementById('progress-success-label').textContent = `✅ 成功 ${audited.toLocaleString()} (${successPct}%)`;
+    document.getElementById('progress-fail-label').textContent = `❌ 失败 ${failed.toLocaleString()} (${failPct}%)`;
 }
 
 // Filter & sort
