@@ -5,15 +5,14 @@
   1. audit-summary.json — 统计摘要（~0.5KB）
   2. audit-N.json — 列表分片（~26KB/个，350条/chunk）
   3. details/{slug}.json — EXTREME 技能独立详情（按需加载）
+  4. details/findings-{N}.json — HIGH/MEDIUM/LOW/UNIQUE findings 批次（按需加载）
 """
 import json, os, sys, time
 
 def generate_site_data(scan_json_path, site_data_dir):
-    # 加载扫描结果
     with open(scan_json_path) as f:
         data = json.load(f)
 
-    # 创建输出目录
     details_dir = os.path.join(site_data_dir, "details")
     os.makedirs(details_dir, exist_ok=True)
 
@@ -29,7 +28,7 @@ def generate_site_data(scan_json_path, site_data_dir):
     print(f"=== 生成站点数据 ===")
     print(f"总技能数: {len(data)}")
 
-    # 1. 超紧凑列表分片
+    # 1. 超紧凑列表分片（所有技能）
     all_slim = []
     for d in data:
         all_slim.append({
@@ -43,7 +42,7 @@ def generate_site_data(scan_json_path, site_data_dir):
             "m": d.get("medium") or 0,
         })
 
-    CHUNK = 350  # ~26KB per chunk
+    CHUNK = 350
     files_list = []
     for i in range(0, len(all_slim), CHUNK):
         chunk = all_slim[i:i+CHUNK]
@@ -52,10 +51,9 @@ def generate_site_data(scan_json_path, site_data_dir):
         with open(os.path.join(site_data_dir, fn), "w") as f:
             f.write(out)
         files_list.append(fn)
-
     print(f"列表分片: {len(files_list)} 个文件")
 
-    # 2. EXTREME 技能独立详情
+    # 2. EXTREME 技能独立详情（含完整 findings + context）
     detail_count = 0
     for d in data:
         if d.get("risk_level") != "EXTREME":
@@ -89,10 +87,47 @@ def generate_site_data(scan_json_path, site_data_dir):
         with open(fn, "w") as f:
             f.write(out)
         detail_count += 1
-
     print(f"EXTREME 详情: {detail_count} 个文件")
 
-    # 3. Summary
+    # 3. HIGH/MEDIUM/LOW/UNKNOWN findings 批次文件（unique rule IDs）
+    non_extreme = []
+    for d in data:
+        if d.get("risk_level") == "EXTREME":
+            continue
+        rules = list(set(
+            fi.get("rule_id", "")
+            for fi in (d.get("findings") or [])
+            if fi.get("severity") in ("HIGH", "CRITICAL")
+        ))
+        non_extreme.append({
+            "s": d["slug"],
+            "n": (d.get("name") or "")[:40],
+            "f": d["file_count"] or 0,
+            "z": d["total_size"] or 0,
+            "S": 1 if d.get("has_scripts") else 0,
+            "H": 1 if d.get("has_hooks") else 0,
+            "E": 1 if d.get("has_exec_directives") else 0,
+            "c": d.get("critical") or 0,
+            "h": d.get("high") or 0,
+            "m": d.get("medium") or 0,
+            "st": d["status"],
+            "r": rules,
+        })
+
+    findings_files = []
+    FINDINGS_CHUNK = 350
+    for i in range(0, len(non_extreme), FINDINGS_CHUNK):
+        chunk = non_extreme[i:i+FINDINGS_CHUNK]
+        fn = f"findings-{i//FINDINGS_CHUNK + 1}.json"
+        fp = os.path.join(details_dir, fn)
+        out = json.dumps(chunk, ensure_ascii=False, separators=(',', ':'))
+        with open(fp, "w") as f:
+            f.write(out)
+        findings_files.append(fn)
+
+    print(f"Findings 批次: {len(findings_files)} 个文件")
+
+    # 4. Summary
     risk_counts = {}
     total_files = 0
     total_size = 0
@@ -114,9 +149,10 @@ def generate_site_data(scan_json_path, site_data_dir):
         if d.get("has_hooks"):
             has_hooks += 1
 
+    scan_duration = os.environ.get("SCAN_DURATION", None)
     summary = {
         "scan_date": time.strftime("%Y-%m-%d %H:%M CST"),
-        "scan_duration": None,  # 由调用方设置
+        "scan_duration": scan_duration,
         "total": len(data),
         "audited": audited,
         "failed": failed,
@@ -126,26 +162,22 @@ def generate_site_data(scan_json_path, site_data_dir):
         "has_hooks": has_hooks,
         "risk_counts": risk_counts,
         "files": files_list,
-        "detail_count": detail_count
+        "detail_count": detail_count,
+        "findings_files": findings_files,
     }
     with open(os.path.join(site_data_dir, "audit-summary.json"), "w") as f:
         json.dump(summary, f, ensure_ascii=False, separators=(',', ':'))
 
-    # 打印统计
     print(f"\n统计:")
-    print(f"  EXTREME: {risk_counts.get('EXTREME', 0)}")
-    print(f"  HIGH: {risk_counts.get('HIGH', 0)}")
-    print(f"  MEDIUM: {risk_counts.get('MEDIUM', 0)}")
-    print(f"  LOW: {risk_counts.get('LOW', 0)}")
-    print(f"  UNKNOWN: {risk_counts.get('UNKNOWN', 0)}")
+    for rl in ["EXTREME", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]:
+        c = risk_counts.get(rl, 0)
+        if c > 0:
+            print(f"  {rl}: {c}")
     print(f"  审计成功: {audited}, 失败: {failed}")
-    print(f"  扫描文件: {total_files}, 数据量: {total_size/1024/1024:.1f} MB")
     print(f"\n✅ 生成完成")
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("用法: python3 generate_site_data.py <scan_json_path> <site_data_dir>")
-        print("  scan_json_path: skillhub-full-scan-*.json 的路径")
-        print("  site_data_dir:   站点 data/ 目录路径")
         sys.exit(1)
     generate_site_data(sys.argv[1], sys.argv[2])

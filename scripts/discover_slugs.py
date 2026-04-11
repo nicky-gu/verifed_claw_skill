@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """发现 Skillhub 全部技能 slug（2字母前缀穷举 + 索引合并）"""
-import json, os, sys, time, urllib.request, urllib.parse
+import argparse, json, os, sys, time, urllib.request, urllib.parse
 
 ALL_SLUGS = {}
 SEARCH_URL = "https://lightmake.site/api/v1/search"
 INDEX_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/skills.json"
-OUTPUT_FILE = os.environ.get("SLUGS_OUTPUT", "/tmp/skillhub_complete_slugs.json")
 
 def search(query, limit=100):
     params = urllib.parse.urlencode({"q": query, "limit": limit, "offset": 0})
@@ -20,6 +19,14 @@ def search(query, limit=100):
         return []
 
 def main():
+    parser = argparse.ArgumentParser(description="发现 Skillhub 全部技能 slug")
+    parser.add_argument("--output", "-o", default=os.environ.get("SLUGS_OUTPUT", "/tmp/skillhub_complete_slugs.json"),
+                        help="输出 JSON 路径 (默认: /tmp/skillhub_complete_slugs.json)")
+    args = parser.parse_args()
+    output_file = args.output
+
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+
     print(f"=== Skillhub 技能发现器 ===")
     
     # 2字母前缀穷举
@@ -87,18 +94,17 @@ def main():
                     "stars": s.get("stars", 0),
                 }
             else:
-                # 补充 downloads/stars
                 ALL_SLUGS[slug]["downloads"] = s.get("downloads", 0)
                 ALL_SLUGS[slug]["stars"] = s.get("stars", 0)
     except Exception as e:
         print(f"  Index fetch failed: {e}", file=sys.stderr)
 
     # 保存
-    with open(OUTPUT_FILE, "w") as f:
+    with open(output_file, "w") as f:
         json.dump(ALL_SLUGS, f, ensure_ascii=False, indent=2)
 
     print(f"\n✅ 发现 {len(ALL_SLUGS)} 个技能")
-    print(f"   保存到: {OUTPUT_FILE}")
+    print(f"   保存到: {output_file}")
 
 if __name__ == "__main__":
     main()

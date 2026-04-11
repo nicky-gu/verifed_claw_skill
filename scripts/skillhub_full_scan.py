@@ -13,8 +13,8 @@ INDEX_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/skills.js
 # 使用 lightmake.site API 作为主要下载源（覆盖全部 15k+ 技能）
 # COS URL 只覆盖索引中的 50 个
 DOWNLOAD_URL_TEMPLATE = "https://lightmake.site/api/v1/download?slug=%s"
-SLUGS_FILE = "/tmp/skillhub_complete_slugs.json"
-OUTPUT_DIR = os.path.expanduser("~/.openclaw/reports")
+SLUGS_FILE = os.environ.get("SLUGS_FILE", "/tmp/skillhub_complete_slugs.json")
+OUTPUT_DIR = os.environ.get("AUDIT_REPORT_DIR", os.path.expanduser("~/.openclaw/reports"))
 MAX_CONCURRENT = 8  # 并发下载数
 MAX_TOTAL = 0        # 0 = 全部
 
